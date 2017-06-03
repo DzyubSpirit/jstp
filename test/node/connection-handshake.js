@@ -7,7 +7,7 @@ const jstp = require('../..');
 const app = require('../fixtures/application');
 const application = new jstp.Application(app.name, app.interfaces);
 
-const Transport = require('../unit/mock/transport');
+const Transport = require('../util/transport.mock');
 
 let server;
 let client;
