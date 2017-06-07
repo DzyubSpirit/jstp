@@ -493,6 +493,57 @@ MaybeLocal<Value> ParseString(Isolate*    isolate,
 
 static unsigned int ReadHexNumber(const char* str, size_t len, bool* ok);
 
+static uint32_t ReadUnicodeEscapeSequence(Isolate* isolate,
+                                          const char* str,
+                                          size_t* size,
+                                          bool* ok) {
+  uint32_t result = 0xFFFD;
+
+  if (isxdigit(str[0])) {
+    result = ReadHexNumber(str, 4, ok);
+    *size = 4;
+  } else if (str[0] == '{') {
+    size_t hex_size;  // maximal hex is 10FFFF
+    for (hex_size = 1;
+         str[hex_size + 1] != '}';
+         hex_size++) {
+      if (str[hex_size + 1] == '\0') {
+        THROW_EXCEPTION(SyntaxError, "Invalid Unicode code point escape");
+        *ok = false;
+        return 0xFFFD;
+      }
+    }
+    result = ReadHexNumber(str + 1, hex_size, ok);
+    if (!*ok) {
+      return 0xFFFD;
+    }
+    *size = hex_size + 2;
+  } else {
+    THROW_EXCEPTION(SyntaxError, "Expected Unicode code point escape");
+    *ok = false;
+  }
+
+  // check for surrogate pair
+  if (0xD800 <= result && result <= 0xDBFF) {
+    size_t low_size;
+    if (str[*size] == '\\' && str[*size + 1] == 'u') {
+      uint32_t low_sur = ReadUnicodeEscapeSequence(isolate,
+                                                   str + *size + 2,
+                                                   &low_size, ok);
+      if (!*ok) {
+        return 0xFFFD;
+      }
+      result = ((result - 0xD800) << 10) + low_sur - 0xDC00 + 0x10000;
+      *size += low_size + 2;
+    } else {
+      THROW_EXCEPTION(SyntaxError, "Expected Unicode surrogate pair");
+      *ok = false;
+    }
+  }
+
+  return result;
+}
+
 // Parses a part of a JavaScript string representation after the backslash
 // character (i.e., an escape sequence without \) into an unescaped control
 // character and writes it to `write_to`.
@@ -542,31 +593,14 @@ static bool GetControlChar(Isolate*    isolate,
     }
 
     case 'u': {
-      unsigned int symb_code;
-      if (isxdigit(str[1])) {
-        symb_code = ReadHexNumber(str + 1, 4, &ok);
-        *size = 5;
-      } else if (str[1] == '{') {
-        size_t hex_size;  // maximal hex is 10FFFF
-        for (hex_size = 1;
-             str[hex_size + 2] != '}' && hex_size <= 6;
-             hex_size++) {
-          if (str[hex_size + 2] == '\0') {
-            THROW_EXCEPTION(SyntaxError, "Invalid Unicode code point escape");
-            return false;
-          }
-        }
-        symb_code = ReadHexNumber(str + 2, hex_size, &ok);
-        *size = hex_size + 3;
-      } else {
-        ok = false;
-      }
+      uint32_t symb_code;
+      symb_code = ReadUnicodeEscapeSequence(isolate, str + 1, size, &ok);
 
       if (!ok) {
-        THROW_EXCEPTION(SyntaxError, "Invalid Unicode escape sequence");
         return false;
       }
       CodePointToUtf8(symb_code, res_len, write_to);
+      *size += 1;
       break;
     }
 
@@ -621,8 +655,21 @@ MaybeLocal<String> ParseKeyInObject(Isolate*    isolate,
     size_t current_length = 0;
     size_t cp_size;
     uint32_t cp;
+    bool ok;
+    bool fallback = false;
     while (current_length < *size) {
-      cp = Utf8ToCodePoint(begin + current_length, &cp_size);
+      if (begin[current_length] == '\\' &&
+          begin[current_length + 1] == 'u') {
+        cp = ReadUnicodeEscapeSequence(isolate, begin + current_length + 2,
+                                       &cp_size, &ok);
+        if (!ok) {
+          return MaybeLocal<String>();
+        }
+        cp_size += 2;
+        fallback = true;
+      } else {
+        cp = Utf8ToCodePoint(begin + current_length, &cp_size);
+      }
       if (current_length == 0 ? IsIdStartCodePoint(cp) :
                                 IsIdPartCodePoint(cp)) {
         current_length += cp_size;
