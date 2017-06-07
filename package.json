@@ -50,9 +50,8 @@
     "webpack": "^2.6.1"
   },
   "scripts": {
-    "test": "npm run test-unit && npm run test-integration && npm run lint",
-    "test-unit": "npm run test-unit-node",
-    "test-unit-node": "tap test/node/*.js",
+    "test": "npm run test-node && npm run test-integration && npm run lint",
+    "test-node": "tap test/node/*.js",
     "test-integration": "node test/integration/run-tests",
     "test-todo": "tap test/todo",
     "lint": "eslint . && remark .",
